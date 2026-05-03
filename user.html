@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NoiseSense – Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+<div id="app-screen" class="screen active">
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-icon">🔊</div>
+        <h2>Noise<span>Sense</span></h2>
+      </div>
+      <div id="sidebar-nav">
+        <div class="nav-section">Navigation</div>
+        <div class="nav-item active" id="nav-live"    onclick="showPanel('live')"   ><span class="ni">📊</span>Live Monitor</div>
+        <div class="nav-item"        id="nav-alerts"  onclick="showPanel('alerts')" ><span class="ni">🔔</span>My Alerts</div>
+        <div class="nav-item"        id="nav-account" onclick="showPanel('account')"><span class="ni">👤</span>Account</div>
+      </div>
+      <div class="sidebar-bottom">
+        <div class="role-badge">
+          <div class="rb-name" id="sb-name">—</div>
+          <div class="rb-role">User</div>
+        </div>
+        <button class="btn-logout" onclick="doLogout()">Sign out</button>
+      </div>
+    </aside>
+    <div class="main">
+      <div class="topbar">
+        <div class="topbar-title" id="topbar-title">Live Monitor</div>
+        <div class="topbar-right">
+          <span id="alert-badge" style="display:none" class="badge-count">0</span>
+          <span style="font-size:12px;color:var(--muted)" id="topbar-time"></span>
+        </div>
+      </div>
+      <div class="content">
+        <div id="panel-live"    class="panel active"></div>
+        <div id="panel-alerts"  class="panel"></div>
+        <div id="panel-account" class="panel"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="toast" class="toast"></div>
+<script src="shared.js"></script>
+<script src="user.js"></script>
+</body>
+</html>
