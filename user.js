@@ -1,23 +1,22 @@
-// ========== USER DASHBOARD ==========
-// Panels: Live Monitor, My Alerts, Account
+// ============================================================
+//  NoiseSense – user.js  (MySQL edition)
+// ============================================================
 
-const TITLES = {
-  live:'Live Monitor', alerts:'My Alerts', account:'Account Settings',
-};
+const TITLES = { live:'Live Monitor', alerts:'My Alerts', account:'Account Settings' };
 
-function init() {
+async function init() {
   if (!currentUser || currentUser.role !== 'user') {
     window.location.href = 'index.html';
     return;
   }
   document.getElementById('sb-name').textContent = currentUser.name;
+  await Promise.all([loadRooms(), loadAlerts(), loadConfig()]);
   showPanel('live');
   startClock();
   startSim(() => {
     const ap  = document.querySelector('.panel.active');
     if (!ap) return;
-    const pid = ap.id.replace('panel-', '');
-    if (pid === 'live') refreshLive();
+    if (ap.id.replace('panel-','') === 'live') refreshLive();
   });
 }
 
@@ -38,10 +37,9 @@ function renderPanel(id) {
   if (!el) return;
   switch (id) {
     case 'live':    renderLive(el);           break;
-    case 'alerts':  renderAlerts(el, false);  break; // read-only, no resolve btn
+    case 'alerts':  renderAlerts(el, false);  break;
     case 'account': renderAccount(el);        break;
   }
 }
 
-// ========== BOOT ==========
 init();

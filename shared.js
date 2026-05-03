@@ -1,103 +1,123 @@
-// ========== SHARED STATE ==========
-// Persisted in sessionStorage so it survives page redirects
+// ============================================================
+//  NoiseSense – shared.js  (MySQL edition)
+//  All state is now fetched from / persisted to the PHP API.
+// ============================================================
 
-function loadState() {
-  const raw = sessionStorage.getItem('ns_state');
-  if (raw) return JSON.parse(raw);
-  return {
-    users: [
-      {id:1,name:'Admin User',email:'admin@example.com',password:'admin123',role:'admin'},
-      {id:2,name:'Manager User',email:'manager@example.com',password:'manager123',role:'manager'},
-      {id:3,name:'Regular User',email:'user@example.com',password:'user123',role:'user'},
-    ],
-    rooms: [
-      {id:1,name:'Laboratory 1',lat:8.359731,lng:124.869193,status:'Normal',db:52},
-      {id:2,name:'Laboratory 2',lat:8.359675,lng:124.869180,status:'Normal',db:48},
-      {id:3,name:'Laboratory 3',lat:8.359619,lng:124.869167,status:'Normal',db:55},
-    ],
-    alerts: [],
-    logs: [{user:'System',action:'Application started',ip:'127.0.0.1',time:new Date().toLocaleString()}],
-    config: {warnThreshold:65,critThreshold:80,emailAlerts:true,soundAlerts:false,visualAlerts:true,recipient:'admin@noisesense.com'},
-    currentUserId: null,
-  };
+const API = 'api';
+
+// ── Auth ──────────────────────────────────────────────────────
+let currentUser = (() => {
+  try { return JSON.parse(sessionStorage.getItem('ns_user')); } catch { return null; }
+})();
+
+function authHeaders() {
+  const token = sessionStorage.getItem('ns_token') ?? '';
+  return { 'Content-Type': 'application/json', 'X-NS-Token': token };
 }
 
-function saveState() {
-  sessionStorage.setItem('ns_state', JSON.stringify({
-    users: USERS, rooms: ROOMS, alerts: ALERTS, logs: LOGS,
-    config: CONFIG, currentUserId: currentUser ? currentUser.id : null,
-  }));
+async function apiFetch(path, opts = {}) {
+  opts.credentials = 'include';
+  opts.headers = { ...authHeaders(), ...(opts.headers ?? {}) };
+  const res = await fetch(`${API}/${path}`, opts);
+  if (res.status === 401) { window.location.href = 'index.html'; return null; }
+  return res.json();
 }
 
-const _state   = loadState();
-const USERS    = _state.users;
-const ROOMS    = _state.rooms;
-const ALERTS   = _state.alerts;
-const LOGS     = _state.logs;
-const CONFIG   = _state.config;
-let currentUser = _state.currentUserId ? USERS.find(u => u.id === _state.currentUserId) : null;
+// ── In-memory runtime state (refreshed from API) ──────────────
+let ROOMS   = [];
+let ALERTS  = [];
+let CONFIG  = { warnThreshold: 65, critThreshold: 80 };
 
-// ========== UTILS ==========
-function fmt(){ return new Date().toLocaleString(); }
-function ts(){  return new Date().toLocaleTimeString(); }
-function sev(db){
-  if (db >= CONFIG.critThreshold) return {label:'Critical', cls:'critical'};
-  if (db >= CONFIG.warnThreshold) return {label:'Warning',  cls:'warning'};
-  return {label:'Normal', cls:'normal'};
+async function loadRooms()  { const d = await apiFetch('rooms.php');  if (d?.ok)  ROOMS  = d.rooms;  }
+async function loadAlerts() { const d = await apiFetch('alerts.php'); if (d?.ok)  ALERTS = d.alerts; }
+async function loadConfig() {
+  const d = await apiFetch('config.php');
+  if (d?.ok) {
+    CONFIG = {
+      warnThreshold:  d.config.warn_threshold,
+      critThreshold:  d.config.crit_threshold,
+      emailAlerts:    !!d.config.email_alerts,
+      soundAlerts:    !!d.config.sound_alerts,
+      visualAlerts:   !!d.config.visual_alerts,
+      recipient:      d.config.alert_recipient,
+    };
+  }
 }
-function toast(msg){
+
+// ── Utils ─────────────────────────────────────────────────────
+function fmt()  { return new Date().toLocaleString(); }
+function ts()   { return new Date().toLocaleTimeString(); }
+function sev(db) {
+  if (db >= CONFIG.critThreshold) return { label: 'Critical', cls: 'critical' };
+  if (db >= CONFIG.warnThreshold) return { label: 'Warning',  cls: 'warning'  };
+  return { label: 'Normal', cls: 'normal' };
+}
+function toast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2600);
 }
-function initials(n){ return n.split(' ').map(w => w[0]).join('').toUpperCase(); }
+function initials(n) { return n.split(' ').map(w => w[0]).join('').toUpperCase(); }
 
-// ========== SHARED SIMULATION ==========
+// ── Chart / Map state ─────────────────────────────────────────
 let chartInst    = null;
 let chartData    = [52,58,55,63,60,48,54,61,57,52,65,50];
 let mapInst      = null;
 let mapMarkers   = [];
 let selectedRoom = 0;
 
+// ── Simulation tick (still client-side; swap for real sensor feed) ──
 function startSim(onTick) {
-  setInterval(() => {
-    ROOMS.forEach(r => {
-      r.db = Math.max(30, Math.min(105, r.db + (Math.random() * 10 - 5)));
+  setInterval(async () => {
+    // Simulate dB readings and POST them to the DB
+    for (const r of ROOMS) {
+      r.db = Math.max(30, Math.min(105, (parseFloat(r.db) || 50) + (Math.random() * 10 - 5)));
       const s = sev(r.db);
-      if (s.label !== r.status && s.label !== 'Normal') {
-        ALERTS.unshift({room:r.name, db:Math.round(r.db), severity:s.label, time:ts(), resolved:false});
-        if (ALERTS.length > 60) ALERTS.pop();
+      if (s.label !== r.status) {
+        r.status = s.label;
+        // Persist reading to MySQL
+        apiFetch('readings.php', {
+          method: 'POST',
+          body: JSON.stringify({ room_id: r.id, db_level: Math.round(r.db) }),
+        });
       }
-      r.status = s.label;
-    });
+    }
+
+    // Refresh alerts from DB every tick
+    await loadAlerts();
+
     // Alert badge
     const crit  = ALERTS.filter(a => !a.resolved && a.severity === 'Critical').length;
     const badge = document.getElementById('alert-badge');
-    if (badge) { if (crit > 0) { badge.style.display='inline'; badge.textContent=crit; } else badge.style.display='none'; }
+    if (badge) {
+      badge.style.display = crit > 0 ? 'inline' : 'none';
+      if (crit > 0) badge.textContent = crit;
+    }
+
     // Chart
-    chartData.push(Math.round(ROOMS[selectedRoom].db));
+    chartData.push(Math.round(ROOMS[selectedRoom]?.db ?? 50));
     if (chartData.length > 14) chartData.shift();
     if (chartInst) { chartInst.data.datasets[0].data = [...chartData]; chartInst.update('none'); }
+
     // Map markers
     if (mapInst && mapMarkers.length) {
       mapMarkers.forEach((m, i) => {
-        const r = ROOMS[i]; const s = sev(r.db);
-        const col = s.cls==='critical'?'#ef5356':s.cls==='warning'?'#f59e0b':'#22d3a0';
-        m.setIcon(L.divIcon({html:`<div style="width:14px;height:14px;border-radius:50%;background:${col};border:2px solid #fff;box-shadow:0 0 0 4px ${col}44"></div>`,iconSize:[14,14],iconAnchor:[7,7]}));
+        const r = ROOMS[i]; if (!r) return;
+        const s   = sev(r.db);
+        const col = s.cls === 'critical' ? '#ef5356' : s.cls === 'warning' ? '#f59e0b' : '#22d3a0';
+        m.setIcon(L.divIcon({ html: `<div style="width:14px;height:14px;border-radius:50%;background:${col};border:2px solid #fff;box-shadow:0 0 0 4px ${col}44"></div>`, iconSize: [14,14], iconAnchor: [7,7] }));
         m.bindPopup(`<b>${r.name}</b><br>${Math.round(r.db)} dB — ${s.label}`);
       });
     }
-    saveState();
+
     if (onTick) onTick();
   }, 2500);
 }
 
-// ========== SHARED PANEL RENDERERS ==========
-// These are used by all three dashboards
-
+// ── Panel renderers (unchanged from original) ─────────────────
 function renderLive(el) {
-  const r   = ROOMS[selectedRoom];
+  const r   = ROOMS[selectedRoom] ?? { name: '—', db: 0 };
   const db  = Math.round(r.db);
   const s   = sev(db);
   const pct = Math.min(100, Math.round((db - 30) / 80 * 100));
@@ -151,8 +171,8 @@ function renderLive(el) {
 }
 
 function refreshLive() {
-  const r   = ROOMS[selectedRoom];
-  const db  = Math.round(r.db);
+  const r   = ROOMS[selectedRoom] ?? {};
+  const db  = Math.round(r.db ?? 0);
   const s   = sev(db);
   const bc  = s.cls==='critical'?'var(--red)':s.cls==='warning'?'var(--amber)':'var(--green)';
   const pct = Math.min(100, Math.round((db - 30) / 80 * 100));
@@ -185,41 +205,44 @@ function renderAlerts(el, canAct) {
     <tbody>${list.map((a,i) => `<tr>
       <td style="font-weight:500">${a.room}</td>
       <td style="font-family:var(--mono)">${a.db==='—'?'—':a.db+' dB'}</td>
-      <td><span class="pill ${a.severity.toLowerCase()}">${a.severity}</span></td>
-      <td style="color:var(--muted)">${a.time}</td>
-      <td>${a.resolved?'<span style="color:var(--green);font-size:12px">Resolved</span>':'<span style="color:var(--muted);font-size:12px">Open</span>'}</td>
-      ${canAct?`<td>${!a.resolved&&a.db!=='—'?`<button class="action-btn" onclick="resolveAlert(${i})">Resolve</button>`:'—'}</td>`:''}`
+      <td><span class="pill ${(a.severity||'').toLowerCase()}">${a.severity}</span></td>
+      <td style="color:var(--muted)">${a.time ?? a.created_at ?? '—'}</td>
+      <td>${(a.resolved||a.is_resolved)?'<span style="color:var(--green);font-size:12px">Resolved</span>':'<span style="color:var(--muted);font-size:12px">Open</span>'}</td>
+      ${canAct?`<td>${!(a.resolved||a.is_resolved)&&a.db!=='—'?`<button class="action-btn" onclick="resolveAlert(${a.id??i})">Resolve</button>`:'—'}</td>`:''}`
     ).join('')}</tbody>
   </table>
 </div>`;
 }
 
-function resolveAlert(i) {
-  ALERTS[i].resolved = true;
-  LOGS.unshift({user:currentUser.name, action:`Resolved alert for ${ALERTS[i].room}`, ip:'127.0.0.1', time:fmt()});
+async function resolveAlert(id) {
+  const data = await apiFetch('alerts.php', {
+    method: 'PUT',
+    body: JSON.stringify({ id }),
+  });
+  if (!data?.ok) { toast(data?.error ?? 'Failed to resolve'); return; }
+  await loadAlerts();
   const el = document.getElementById('panel-alerts');
-  if (el) renderAlerts(el, ['admin','manager'].includes(currentUser.role));
-  saveState();
+  if (el) renderAlerts(el, ['admin','manager'].includes(currentUser?.role));
   toast('Alert resolved');
 }
 
 function renderReports(el) {
+  const avgDb = ROOMS.length ? Math.round(ROOMS.reduce((s,r) => s + parseFloat(r.db||0), 0) / ROOMS.length) : 0;
   el.innerHTML = `
 <div class="grid-3">
-  <div class="card" style="margin-bottom:0"><div class="card-title">Avg dB today</div><div class="stat-val">${Math.round(ROOMS.reduce((s,r)=>s+r.db,0)/ROOMS.length)}<span style="font-size:16px;color:var(--muted)"> dB</span></div></div>
+  <div class="card" style="margin-bottom:0"><div class="card-title">Avg dB today</div><div class="stat-val">${avgDb}<span style="font-size:16px;color:var(--muted)"> dB</span></div></div>
   <div class="card" style="margin-bottom:0"><div class="card-title">Total alerts</div><div class="stat-val">${ALERTS.length}</div></div>
   <div class="card" style="margin-bottom:0"><div class="card-title">Rooms monitored</div><div class="stat-val">${ROOMS.length}</div></div>
 </div>
 <div class="card">
   <div class="card-title">Per-room summary</div>
   <table class="data-table">
-    <thead><tr><th>Room</th><th>Current dB</th><th>Peak dB</th><th>Status</th><th>Alerts</th></tr></thead>
+    <thead><tr><th>Room</th><th>Current dB</th><th>Status</th><th>Alerts</th></tr></thead>
     <tbody>${ROOMS.map(r => { const s = sev(r.db); return `<tr>
       <td style="font-weight:500">${r.name}</td>
       <td style="font-family:var(--mono)">${Math.round(r.db)}</td>
-      <td style="font-family:var(--mono)">${Math.round(r.db+5)}</td>
       <td><span class="pill ${s.cls}">${s.label}</span></td>
-      <td>${ALERTS.filter(a=>a.room===r.name).length}</td>
+      <td>${ALERTS.filter(a => a.room === r.name).length}</td>
     </tr>`; }).join('')}</tbody>
   </table>
 </div>
@@ -232,7 +255,7 @@ function exportCSV() {
   const rows = [['Room','Current dB','Status','Alerts'], ...ROOMS.map(r=>[r.name,Math.round(r.db),r.status,ALERTS.filter(a=>a.room===r.name).length])];
   const csv  = rows.map(r=>r.join(',')).join('\n');
   const a    = document.createElement('a');
-  a.href = 'data:text/csv,' + encodeURIComponent(csv);
+  a.href     = 'data:text/csv,' + encodeURIComponent(csv);
   a.download = 'noise_report.csv';
   a.click();
   toast('CSV exported');
@@ -265,16 +288,25 @@ function renderConfig(el, canEdit) {
   <div class="card">
     <div class="card-title">Email settings</div>
     <div class="mb16"><div class="field-label">Recipient email</div><input class="field" value="${CONFIG.recipient}" ${!canEdit?'disabled':''} onchange="CONFIG.recipient=this.value"></div>
-    <div><div class="field-label">Quiet period notes</div><textarea class="field" rows="3" placeholder="e.g. exclude during fire drills…" ${!canEdit?'disabled':''}></textarea></div>
   </div>
 </div>
 ${canEdit ? `<div style="display:flex;justify-content:flex-end"><button class="btn-small" onclick="saveConfig()">Save Configuration</button></div>` : '<p style="color:var(--muted);font-size:13px">View only — manager or admin can edit.</p>'}`;
 }
 
-function saveConfig() {
-  LOGS.unshift({user:currentUser.name, action:'Updated alert configuration', ip:'127.0.0.1', time:fmt()});
-  saveState();
-  toast('Configuration saved');
+async function saveConfig() {
+  const data = await apiFetch('config.php', {
+    method: 'PUT',
+    body: JSON.stringify({
+      warn_threshold:  CONFIG.warnThreshold,
+      crit_threshold:  CONFIG.critThreshold,
+      email_alerts:    CONFIG.emailAlerts ? 1 : 0,
+      sound_alerts:    CONFIG.soundAlerts ? 1 : 0,
+      visual_alerts:   CONFIG.visualAlerts ? 1 : 0,
+      alert_recipient: CONFIG.recipient,
+    }),
+  });
+  if (data?.ok) toast('Configuration saved');
+  else toast(data?.error ?? 'Failed to save');
 }
 
 function renderAccount(el) {
@@ -301,28 +333,36 @@ function renderAccount(el) {
 </div>`;
 }
 
-function saveProfile() {
+async function saveProfile() {
   const name  = document.getElementById('acc-name').value.trim();
   const email = document.getElementById('acc-email').value.trim();
   if (!name || !email) { toast('Fields cannot be empty'); return; }
+
+  const data = await apiFetch('users.php', {
+    method: 'PUT',
+    body: JSON.stringify({ id: currentUser.id, name, email }),
+  });
+  if (!data?.ok) { toast(data?.error ?? 'Failed to save'); return; }
+
   currentUser.name  = name;
   currentUser.email = email;
+  sessionStorage.setItem('ns_user', JSON.stringify(currentUser));
   document.getElementById('sb-name').textContent = name;
-  LOGS.unshift({user:name, action:'Updated profile', ip:'127.0.0.1', time:fmt()});
-  saveState();
   toast('Profile saved');
 }
 
-function savePassword() {
+async function savePassword() {
   const curr = document.getElementById('acc-curr').value;
   const nw   = document.getElementById('acc-new').value;
   const conf = document.getElementById('acc-conf').value;
-  if (curr !== currentUser.password) { toast('Current password is wrong'); return; }
-  if (nw.length < 6)                 { toast('Password must be at least 6 characters'); return; }
-  if (nw !== conf)                   { toast('Passwords do not match'); return; }
-  currentUser.password = nw;
-  LOGS.unshift({user:currentUser.name, action:'Changed password', ip:'127.0.0.1', time:fmt()});
-  saveState();
+  if (nw.length < 6)  { toast('Password must be at least 6 characters'); return; }
+  if (nw !== conf)     { toast('Passwords do not match'); return; }
+
+  const data = await apiFetch('users.php', {
+    method: 'PUT',
+    body: JSON.stringify({ id: currentUser.id, current_password: curr, password: nw }),
+  });
+  if (!data?.ok) { toast(data?.error ?? 'Failed to update'); return; }
   toast('Password updated');
 }
 
@@ -333,11 +373,11 @@ function startClock() {
   }, 1000);
 }
 
-function doLogout() {
+async function doLogout() {
   if (mapInst)   { mapInst.remove(); mapInst = null; }
   if (chartInst) { chartInst.destroy(); chartInst = null; }
-  LOGS.unshift({user:currentUser.name, action:'Logged out', ip:'127.0.0.1', time:fmt()});
-  currentUser = null;
-  saveState();
+  await apiFetch('logout.php', { method: 'POST' });
+  sessionStorage.removeItem('ns_user');
+  sessionStorage.removeItem('ns_token');
   window.location.href = 'index.html';
 }
