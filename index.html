@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NoiseSense – Sign In</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="login-screen" class="screen active">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="logo-icon">🔊</div>
+      <h1>Noise<span>Sense</span></h1>
+    </div>
+    <div id="login-err" class="login-err">Invalid credentials. Please try again.</div>
+    <div class="mb16">
+      <div class="field-label">Email or username</div>
+      <input id="login-user" class="field" type="text" placeholder="admin@example.com">
+    </div>
+    <div class="mb24">
+      <div class="field-label">Password</div>
+      <input id="login-pass" class="field" type="password" placeholder="••••••••">
+    </div>
+    <button class="btn-primary" onclick="doLogin()">Sign in →</button>
+    <div class="login-demo">
+      <div class="demo-label">Quick demo accounts</div>
+      <div class="demo-btn" onclick="fillDemo('admin@example.com','admin123')">🔑 Admin<br><span style="color:var(--accent)">admin123</span></div>
+      <div class="demo-btn" onclick="fillDemo('manager@example.com','manager123')">📊 Manager<br><span style="color:var(--accent)">manager123</span></div>
+      <div class="demo-btn" onclick="fillDemo('user@example.com','user123')">👤 User<br><span style="color:var(--accent)">user123</span></div>
+    </div>
+  </div>
+</div>
+<div id="toast" class="toast"></div>
+
+<script>
+const USERS = [
+  {id:1,name:'Admin User',  email:'admin@example.com',   password:'admin123',   role:'admin'},
+  {id:2,name:'Manager User',email:'manager@example.com', password:'manager123', role:'manager'},
+  {id:3,name:'Regular User',email:'user@example.com',    password:'user123',    role:'user'},
+];
+
+function fillDemo(u, p) {
+  document.getElementById('login-user').value = u;
+  document.getElementById('login-pass').value = p;
+}
+
+function doLogin() {
+  const u     = document.getElementById('login-user').value.trim();
+  const p     = document.getElementById('login-pass').value;
+  const found = USERS.find(x => x.email === u || x.name.toLowerCase() === u.toLowerCase());
+  const err   = document.getElementById('login-err');
+  if (found && found.password === p) {
+    err.style.display = 'none';
+    // Seed session storage with fresh state + current user
+    const state = {
+      users: USERS,
+      rooms: [
+        {id:1,name:'Laboratory 1',lat:8.359731,lng:124.869193,status:'Normal',db:52},
+        {id:2,name:'Laboratory 2',lat:8.359675,lng:124.869180,status:'Normal',db:48},
+        {id:3,name:'Laboratory 3',lat:8.359619,lng:124.869167,status:'Normal',db:55},
+      ],
+      alerts: [],
+      logs: [
+        {user:found.name, action:'Logged in',          ip:'127.0.0.1', time:new Date().toLocaleString()},
+        {user:'System',   action:'Application started',ip:'127.0.0.1', time:new Date().toLocaleString()},
+      ],
+      config: {warnThreshold:65,critThreshold:80,emailAlerts:true,soundAlerts:false,visualAlerts:true,recipient:'admin@noisesense.com'},
+      currentUserId: found.id,
+    };
+    sessionStorage.setItem('ns_state', JSON.stringify(state));
+    const dest = {admin:'admin.html', manager:'manager.html', user:'user.html'};
+    window.location.href = dest[found.role];
+  } else {
+    err.style.display = 'block';
+  }
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+</script>
+</body>
+</html>
