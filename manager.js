@@ -1,17 +1,19 @@
-// ========== MANAGER DASHBOARD ==========
-// Panels: Live, Rooms, Alerts, Reports, Config, Account
+// ============================================================
+//  NoiseSense – manager.js  (MySQL edition)
+// ============================================================
 
 const TITLES = {
   live:'Live Monitor', rooms:'Room Management', alerts:'Alert Records',
   reports:'Reports', config:'Alert Configuration', account:'Account Settings',
 };
 
-function init() {
+async function init() {
   if (!currentUser || currentUser.role !== 'manager') {
     window.location.href = 'index.html';
     return;
   }
   document.getElementById('sb-name').textContent = currentUser.name;
+  await Promise.all([loadRooms(), loadAlerts(), loadConfig()]);
   showPanel('live');
   startClock();
   startSim(() => {
@@ -39,16 +41,15 @@ function renderPanel(id) {
   const el = document.getElementById('panel-' + id);
   if (!el) return;
   switch (id) {
-    case 'live':    renderLive(el);          break;
-    case 'rooms':   renderRooms(el);         break;
-    case 'alerts':  renderAlerts(el, true);  break;
-    case 'reports': renderReports(el);       break;
-    case 'config':  renderConfig(el, true);  break;
-    case 'account': renderAccount(el);       break;
+    case 'live':    renderLive(el);         break;
+    case 'rooms':   renderRooms(el);        break;
+    case 'alerts':  renderAlerts(el, true); break;
+    case 'reports': renderReports(el);      break;
+    case 'config':  renderConfig(el, true); break;
+    case 'account': renderAccount(el);      break;
   }
 }
 
-// --- ROOMS (manager: can ack, cannot add/delete) ---
 function renderRooms(el) {
   el.innerHTML = `
 <div class="card">
@@ -83,5 +84,4 @@ function refreshRoomList() {
 
 function ackRoom(i) { toast(`${ROOMS[i].name} acknowledged`); }
 
-// ========== BOOT ==========
 init();

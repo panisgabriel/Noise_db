@@ -1,5 +1,7 @@
-// ========== ADMIN DASHBOARD ==========
-// Panels: Live, Rooms, Alerts, Reports, Users, Logs, Config, Account
+// ============================================================
+//  NoiseSense – admin.js  (MySQL edition)
+//  Panels: Live, Rooms, Alerts, Reports, Users, Logs, Config, Account
+// ============================================================
 
 const TITLES = {
   live:'Live Monitor', rooms:'Room Management', alerts:'Alert Records',
@@ -7,12 +9,16 @@ const TITLES = {
   config:'Alert Configuration', account:'Account Settings',
 };
 
-function init() {
+async function init() {
   if (!currentUser || currentUser.role !== 'admin') {
     window.location.href = 'index.html';
     return;
   }
   document.getElementById('sb-name').textContent = currentUser.name;
+
+  // Load initial data from MySQL
+  await Promise.all([loadRooms(), loadAlerts(), loadConfig()]);
+
   showPanel('live');
   startClock();
   startSim(() => {
@@ -40,18 +46,18 @@ function renderPanel(id) {
   const el = document.getElementById('panel-' + id);
   if (!el) return;
   switch (id) {
-    case 'live':    renderLive(el);              break;
-    case 'rooms':   renderRooms(el);             break;
-    case 'alerts':  renderAlerts(el, true);      break;
-    case 'reports': renderReports(el);           break;
-    case 'users':   renderUsers(el);             break;
-    case 'logs':    renderLogs(el);              break;
-    case 'config':  renderConfig(el, true);      break;
-    case 'account': renderAccount(el);           break;
+    case 'live':    renderLive(el);         break;
+    case 'rooms':   renderRooms(el);        break;
+    case 'alerts':  renderAlerts(el, true); break;
+    case 'reports': renderReports(el);      break;
+    case 'users':   renderUsersPanel(el);   break;
+    case 'logs':    renderLogsPanel(el);    break;
+    case 'config':  renderConfig(el, true); break;
+    case 'account': renderAccount(el);      break;
   }
 }
 
-// --- ROOMS (admin: can add/delete) ---
+// ── ROOMS ──────────────────────────────────────────────────────
 function renderRooms(el) {
   el.innerHTML = `
 <div class="card">
@@ -78,7 +84,7 @@ function buildRoomList() {
         <span class="room-db">${Math.round(r.db)} dB</span>
         <span class="pill ${s.cls}">${s.label}</span>
         <button class="action-btn" onclick="ackRoom(${i})">✔ Ack</button>
-        <button class="action-btn danger" onclick="delRoom(${i})">Delete</button>
+        <button class="action-btn danger" onclick="delRoom(${r.id},'${r.name.replace(/'/g,"\\'")}')">Delete</button>
       </div>
     </div>`;
   }).join('');
@@ -89,49 +95,59 @@ function refreshRoomList() {
   if (el) el.innerHTML = buildRoomList();
 }
 
-function addRoom() {
+async function addRoom() {
   const inp  = document.getElementById('new-room');
   const name = inp.value.trim();
   if (!name) return;
-  ROOMS.push({id:Date.now(), name, lat:8.359+Math.random()*.001, lng:124.869+Math.random()*.001, status:'Normal', db:50});
-  LOGS.unshift({user:currentUser.name, action:`Added room: ${name}`, ip:'127.0.0.1', time:fmt()});
+  const data = await apiFetch('rooms.php', {
+    method: 'POST',
+    body: JSON.stringify({ name, lat: 8.359 + Math.random() * .001, lng: 124.869 + Math.random() * .001 }),
+  });
+  if (!data?.ok) { toast(data?.error ?? 'Failed to add room'); return; }
+  await loadRooms();
   inp.value = '';
-  saveState();
   renderRooms(document.getElementById('panel-rooms'));
   toast(`Room "${name}" added`);
 }
 
-function delRoom(i) {
-  if (!confirm(`Delete "${ROOMS[i].name}"?`)) return;
-  const n = ROOMS[i].name;
-  ROOMS.splice(i, 1);
-  LOGS.unshift({user:currentUser.name, action:`Deleted room: ${n}`, ip:'127.0.0.1', time:fmt()});
-  saveState();
+async function delRoom(id, name) {
+  if (!confirm(`Delete "${name}"?`)) return;
+  const data = await apiFetch('rooms.php', {
+    method: 'DELETE',
+    body: JSON.stringify({ id }),
+  });
+  if (!data?.ok) { toast(data?.error ?? 'Failed to delete'); return; }
+  await loadRooms();
   renderRooms(document.getElementById('panel-rooms'));
-  toast(`Room "${n}" deleted`);
+  toast(`Room "${name}" deleted`);
 }
 
 function ackRoom(i) { toast(`${ROOMS[i].name} acknowledged`); }
 
-// --- USERS (admin only) ---
-function renderUsers(el) {
+// ── USERS ──────────────────────────────────────────────────────
+let ALL_USERS = [];
+
+async function renderUsersPanel(el) {
+  const data = await apiFetch('users.php');
+  ALL_USERS = data?.users ?? [];
+
   el.innerHTML = `
 <div class="card">
   <div class="card-title">All users</div>
   <table class="data-table">
     <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Actions</th></tr></thead>
-    <tbody>${USERS.map((u, i) => `<tr>
+    <tbody>${ALL_USERS.map((u) => `<tr>
       <td style="font-weight:500">${u.name}</td>
       <td style="color:var(--muted)">${u.email}</td>
       <td><span class="pill ${u.role==='admin'?'critical':u.role==='manager'?'warning':'normal'}">${u.role}</span></td>
       <td>
-        <select class="field" style="display:inline;width:auto;padding:4px 8px;font-size:12px" onchange="changeRole(${i},this.value)">
+        <select class="field" style="display:inline;width:auto;padding:4px 8px;font-size:12px" onchange="changeRole(${u.id},this.value)">
           <option ${u.role==='user'?'selected':''} value="user">user</option>
           <option ${u.role==='manager'?'selected':''} value="manager">manager</option>
           <option ${u.role==='admin'?'selected':''} value="admin">admin</option>
         </select>
-        ${u.id !== currentUser.id
-          ? `<button class="action-btn danger" onclick="delUser(${i})" style="margin-left:6px">Delete</button>`
+        ${u.id != currentUser.id
+          ? `<button class="action-btn danger" onclick="delUser(${u.id},'${u.name.replace(/'/g,"\\'")}')">Delete</button>`
           : '<span style="font-size:11px;color:var(--muted);margin-left:8px">(you)</span>'}
       </td>
     </tr>`).join('')}</tbody>
@@ -153,46 +169,47 @@ function renderUsers(el) {
 </div>`;
 }
 
-function changeRole(i, role) {
-  USERS[i].role = role;
-  LOGS.unshift({user:currentUser.name, action:`Changed ${USERS[i].name} role to ${role}`, ip:'127.0.0.1', time:fmt()});
-  saveState();
-  renderUsers(document.getElementById('panel-users'));
+async function changeRole(id, role) {
+  const data = await apiFetch('users.php', { method: 'PUT', body: JSON.stringify({ id, role }) });
+  if (!data?.ok) { toast(data?.error ?? 'Failed to update role'); return; }
   toast('Role updated');
+  renderUsersPanel(document.getElementById('panel-users'));
 }
 
-function delUser(i) {
-  if (!confirm(`Delete user "${USERS[i].name}"?`)) return;
-  const n = USERS[i].name;
-  USERS.splice(i, 1);
-  LOGS.unshift({user:currentUser.name, action:`Deleted user: ${n}`, ip:'127.0.0.1', time:fmt()});
-  saveState();
-  renderUsers(document.getElementById('panel-users'));
+async function delUser(id, name) {
+  if (!confirm(`Delete user "${name}"?`)) return;
+  const data = await apiFetch('users.php', { method: 'DELETE', body: JSON.stringify({ id }) });
+  if (!data?.ok) { toast(data?.error ?? 'Failed to delete'); return; }
   toast('User deleted');
+  renderUsersPanel(document.getElementById('panel-users'));
 }
 
-function addUser() {
+async function addUser() {
   const name  = document.getElementById('nu-name').value.trim();
   const email = document.getElementById('nu-email').value.trim();
   const pass  = document.getElementById('nu-pass').value;
   const role  = document.getElementById('nu-role').value;
   if (!name || !email || !pass) { toast('Fill all fields'); return; }
-  if (USERS.find(u => u.email === email)) { toast('Email already exists'); return; }
-  USERS.push({id:Date.now(), name, email, password:pass, role});
-  LOGS.unshift({user:currentUser.name, action:`Added user: ${name}`, ip:'127.0.0.1', time:fmt()});
-  saveState();
-  renderUsers(document.getElementById('panel-users'));
+
+  const data = await apiFetch('users.php', {
+    method: 'POST',
+    body: JSON.stringify({ name, email, password: pass, role }),
+  });
+  if (!data?.ok) { toast(data?.error ?? 'Failed to add user'); return; }
   toast(`User "${name}" added`);
+  renderUsersPanel(document.getElementById('panel-users'));
 }
 
-// --- LOGS (admin only) ---
-function renderLogs(el) {
+// ── LOGS ───────────────────────────────────────────────────────
+async function renderLogsPanel(el) {
+  const data = await apiFetch('logs.php');
+  const logs = data?.logs ?? [];
   el.innerHTML = `
 <div class="card">
   <div class="card-title">System activity log</div>
   <table class="data-table">
     <thead><tr><th>User</th><th>Action</th><th>IP</th><th>Time</th></tr></thead>
-    <tbody>${LOGS.slice(0,40).map(l => `<tr>
+    <tbody>${logs.map(l => `<tr>
       <td style="font-weight:500">${l.user}</td>
       <td>${l.action}</td>
       <td style="font-family:var(--mono);font-size:12px">${l.ip}</td>
@@ -202,5 +219,5 @@ function renderLogs(el) {
 </div>`;
 }
 
-// ========== BOOT ==========
+// ── BOOT ───────────────────────────────────────────────────────
 init();
